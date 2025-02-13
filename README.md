@@ -56,7 +56,7 @@ The running executable needs to be able to find the NDISDK library (on windows, 
 ## Usage
 Upon running, the default audio device is detected. This will be used for audio output. It is identified in the Log window.
 
-![Image of NDRReceiver application](https://github.com/HowlsMovingCast/NDIReceive/blob/master/overview.jpg?raw=true)
+![Image of NDRReceiver application](https://github.com/HowlsMovingCast/NDIReceive/blob/main/readmeImages/overview.jpg?raw=true)
 
 
 Find NDI streams by clicking "Scan for streams." 
