@@ -1,0 +1,74 @@
+#ifndef MAINWINDOW_H
+#define MAINWINDOW_H
+
+#include <QMainWindow>
+#include <QtConcurrent/QtConcurrent>
+#include <QImage>
+#include <QAudioDevice>
+#include <QMediaDevices>
+#include <QAudioFormat>
+#include <QAudioSink>
+#include <atomic> 
+#include "Processing.NDI.Lib.h"
+
+
+QT_BEGIN_NAMESPACE
+namespace Ui {
+class MainWindow;
+}
+QT_END_NAMESPACE
+
+class MainWindow : public QMainWindow
+{
+    Q_OBJECT
+
+public:
+    MainWindow(QWidget *parent = nullptr);
+    ~MainWindow();
+
+
+private:
+    Ui::MainWindow *ui;
+
+    NDIlib_find_create_t m_find_create;
+    NDIlib_find_instance_t m_findInstance;
+    NDIlib_recv_instance_t m_pNDIlibRecv;
+    NDIlib_framesync_instance_t m_pNdiFrameSync;
+
+    QAudioDevice m_defaultAudioDevice{ QMediaDevices::defaultAudioOutput() }; // This can take significant time to call; do it here rather than in an audio loop
+    bool m_audioIdentified{ false };
+    QScopedPointer<QAudioSink> m_pAudioSink;
+    QIODevice* m_pAudioSinkIoDevice{ nullptr }; // Pointer to the QT audio sink's IO device - this is where audio data is written to for output
+
+    uint m_sampleRateToDraw{ 48000 }; // Commonly found value
+    uint m_numChannels{ 2 }; // Sensible default
+
+    void captureAudioFrame(NDIlib_framesync_instance_t const& pNdiFrameSync, uint const microsecondsSinceLastCapture);
+    void processOutputAudioFrame(NDIlib_audio_frame_v2_t const& audio_frame, int const numSamplesToFetchPerChannel);
+    void identifyAudioParameters(NDIlib_audio_frame_v2_t const& audio_frame);
+    std::vector<float>      m_vecInterleavedData;   // For NDI utility function to write interleaved audio data into
+    QByteArray              m_audioOutputsBuffer;   // Holding buffer for audio data before passing to the Qt audio sink's IO device
+
+    void log(QString const& logline, bool doLog = true);
+
+    QFutureWatcher<QStringList>* findSourcesWatcher{ new QFutureWatcher<QStringList>(this) };
+    void findSourcesFinished();
+    void launchFindNDISources();
+    QStringList findNDISources();
+
+    QFutureWatcher<QImage>* captureVideoFrameWatcher{ new QFutureWatcher<QImage>(this) };
+    QImage captureVideoFrame(QString sourceName);
+    void launchCaptureVideoFrame();
+    void captureVideoFrameFinished();
+
+    QFutureWatcher<bool>* playVideoWatcher{ new QFutureWatcher<bool>(this) };
+    std::atomic<bool> m_stopPlayingOut{ false };
+    bool playVideo(QString sourceName);
+    void launchPlayVideo();
+    void playVideoFinished();
+    void captureAndProcessForDisplayVideoFrame(NDIlib_framesync_instance_t const& pNdiFrameSync);
+signals:
+    void logOnWidgetThread(QString);
+    void updateVideoPlaybackImage(QPixmap);
+};
+#endif // MAINWINDOW_H
