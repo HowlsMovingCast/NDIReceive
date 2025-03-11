@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QList>
 #include <QtConcurrent/QtConcurrent>
 #include <QImage>
 #include <QAudioDevice>
@@ -22,6 +23,9 @@ class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
 public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
@@ -35,13 +39,13 @@ private:
     NDIlib_recv_instance_t m_pNDIlibRecv;
     NDIlib_framesync_instance_t m_pNdiFrameSync;
 
+    QList<QAudioDevice> m_detectedAudioDevices;
     QAudioDevice m_defaultAudioDevice{ QMediaDevices::defaultAudioOutput() }; // This can take significant time to call; do it here rather than in an audio loop
+    QAudioDevice m_selectedAudioDevice{ m_defaultAudioDevice }; // Make it easy for users who don't want to pick through audio devices
     bool m_audioIdentified{ false };
-    QScopedPointer<QAudioSink> m_pAudioSink;
+    QAudioSink* m_pAudioSink{ nullptr }; // REPLACE this with memory safe option. Note QObjects are sometimes awkward about being created/deleted across threads.
     QIODevice* m_pAudioSinkIoDevice{ nullptr }; // Pointer to the QT audio sink's IO device - this is where audio data is written to for output
-
-    uint m_sampleRateToDraw{ 48000 }; // Commonly found value
-    uint m_numChannels{ 2 }; // Sensible default
+    QAudioFormat m_currentAudioFormat;
 
     void captureAudioFrame(NDIlib_framesync_instance_t const& pNdiFrameSync, uint const microsecondsSinceLastCapture);
     void processOutputAudioFrame(NDIlib_audio_frame_v2_t const& audio_frame, int const numSamplesToFetchPerChannel);
@@ -62,8 +66,10 @@ private:
     void captureVideoFrameFinished();
 
     QFutureWatcher<bool>* playVideoWatcher{ new QFutureWatcher<bool>(this) };
-    std::atomic<bool> m_stopPlayingOut{ false };
+    std::atomic<bool> m_stopPlayingOut{ true };
     bool playVideo(QString sourceName);
+    void redetectSoundDevices();
+    void selectedSoundDeviceChanged(int const index);
     void launchPlayVideo();
     void playVideoFinished();
     void captureAndProcessForDisplayVideoFrame(NDIlib_framesync_instance_t const& pNdiFrameSync);

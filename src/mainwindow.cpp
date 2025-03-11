@@ -43,7 +43,8 @@ MainWindow::MainWindow(QWidget *parent)
 	connect(ui->buttonCaptureVideoFrame, &QPushButton::clicked, this, &MainWindow::launchCaptureVideoFrame);
 	connect(ui->buttonPlayVideo, &QPushButton::clicked, this, &MainWindow::launchPlayVideo);
 	connect(ui->buttonStopVideo, &QPushButton::clicked, this, [&m_stopPlayingOut = m_stopPlayingOut]() {m_stopPlayingOut.store(true);});
-
+	connect(ui->buttonRedetectSoundDevices, &QPushButton::clicked, this, &MainWindow::redetectSoundDevices);
+	connect(ui->cbSoundDevices, &QComboBox::currentIndexChanged, this, &MainWindow::selectedSoundDeviceChanged);
 	connect(findSourcesWatcher, &QFutureWatcher<QStringList>::finished, this, &MainWindow::findSourcesFinished);
 	connect(captureVideoFrameWatcher, &QFutureWatcher<QImage>::finished, this, & MainWindow::captureVideoFrameFinished);
 	connect(playVideoWatcher, &QFutureWatcher<bool>::finished, this, &MainWindow::playVideoFinished);
@@ -54,6 +55,12 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     delete ui;
+}
+
+void MainWindow::selectedSoundDeviceChanged(int const index)
+{
+	m_selectedAudioDevice = m_detectedAudioDevices.at(index);
+	log(QString("Selected sound device updated: %1").arg(m_selectedAudioDevice.description()));
 }
 
 void MainWindow::launchFindNDISources()
@@ -130,6 +137,12 @@ void MainWindow::launchCaptureVideoFrame()
 	captureVideoFrameWatcher->setFuture(QtConcurrent::run(&MainWindow::captureVideoFrame, this, selectedSource));
 }
 
+void MainWindow::closeEvent(QCloseEvent* event) // Called when user closes application
+{
+	ui->buttonStopVideo->click(); // Elegantly (we hope!) halt the infinite loop of playing out, rather than violating QT rules about threads and objects
+	// Don't accept or ignore the event; it will propogate upwards on its own
+}
+
 QImage MainWindow::captureVideoFrame(QString sourceName)
 {
 	// This function sets up and tears down the NDI receiving objects every time it is called.
@@ -191,6 +204,11 @@ void MainWindow::captureAudioFrame(NDIlib_framesync_instance_t const& pNdiFrameS
 		if (!m_audioIdentified) 
 		{
 			NDIlib_framesync_capture_audio(pNdiFrameSync, &audio_frame, 0, 0, 0);
+			if (m_pAudioSink) // Could have leftover audio sink from earlier captures
+			{
+				delete m_pAudioSink;
+				m_pAudioSink = nullptr;
+			}
 			identifyAudioParameters(audio_frame);
 		}
 		else if (m_pAudioSink)
@@ -204,12 +222,12 @@ void MainWindow::captureAudioFrame(NDIlib_framesync_instance_t const& pNdiFrameS
 			else
 			{
 				// Audio sink was previously started. Let's just start putting audio into it
-				int const numSamplesToFetchPerChannel = m_sampleRateToDraw * (microsecondsSinceLastCapture / 1000000.0);
+				int const numSamplesToFetchPerChannel = m_currentAudioFormat.sampleRate() * (microsecondsSinceLastCapture / 1000000.0);
 				NDIlib_framesync_capture_audio(
 					pNdiFrameSync, // The frame sync instance. NDILib object
 					&audio_frame, // The destination audio buffer. NDILib object 
-					m_sampleRateToDraw,
-					2, // 2 channels to draw
+					m_currentAudioFormat.sampleRate(),
+					m_currentAudioFormat.channelCount(), // 2 channels to draw
 					numSamplesToFetchPerChannel);
 
 				processOutputAudioFrame(audio_frame, numSamplesToFetchPerChannel);
@@ -226,11 +244,11 @@ void MainWindow::processOutputAudioFrame(NDIlib_audio_frame_v2_t const& audio_fr
 	//  However, QAudioSink expects interleaved data. Fortunately, an NDILib utility function can handle the conversion, 
 	//  but we still need to ensure the recipient structure is properly populated with data.
 	NDIlib_audio_frame_interleaved_32f_t ndiInterleavedAudioStore;
-	ndiInterleavedAudioStore.sample_rate = m_sampleRateToDraw;
+	ndiInterleavedAudioStore.sample_rate = m_currentAudioFormat.sampleRate();
 	ndiInterleavedAudioStore.no_samples = numSamplesToFetchPerChannel;
-	ndiInterleavedAudioStore.no_channels = m_numChannels;
+	ndiInterleavedAudioStore.no_channels = m_currentAudioFormat.channelCount();
 
-	int const totalNumberOfSamplesAcrossAllChannels = numSamplesToFetchPerChannel * m_numChannels;
+	int const totalNumberOfSamplesAcrossAllChannels = numSamplesToFetchPerChannel * m_currentAudioFormat.channelCount();
 
 	// We must also provide the memory for the rearranged audio data to occupy.
 	if (m_vecInterleavedData.size() < totalNumberOfSamplesAcrossAllChannels)
@@ -291,6 +309,30 @@ void MainWindow::captureAndProcessForDisplayVideoFrame(NDIlib_framesync_instance
 	NDIlib_framesync_free_video(pNdiFrameSync, &video_frame);
 }
 
+void MainWindow::redetectSoundDevices()
+{
+	if (m_stopPlayingOut.load() != true) // Used as proxy for "are we playing out?"
+	{
+		QMessageBox::warning(this, "Detect audio devices", "Cannot detect audio devices while playing out");
+		return;
+	}
+
+
+	// This is being done on the MainWindow's thread. This should make it safe to directly call on the UI elements, 
+	// BUT if this function takes a while, the GUI will freeze. If that's an issue, move the detection of the audio
+	// output devices to a separate thread and when that thread is done, then update the UI.
+	log(QString("Detecting output audio devices"));
+	ui->cbSoundDevices->clear();
+
+	m_detectedAudioDevices = QMediaDevices::audioOutputs();
+
+	for (auto const& device : m_detectedAudioDevices)
+	{
+		log(QString("Detected audio output device: ID: %1. Description: %2.").arg(device.id()).arg(device.description()));
+		ui->cbSoundDevices->addItem(device.description());
+	}
+}
+
 void MainWindow::launchPlayVideo()
 {
 	if (!ui->listWidgetStreamsFound->currentItem())
@@ -335,6 +377,7 @@ bool MainWindow::playVideo(QString sourceName)
 	std::chrono::time_point<std::chrono::steady_clock> m_timeOflastSample{ std::chrono::steady_clock::now() }; //When to take a new sample
 
 	m_audioIdentified = false;
+	m_stopPlayingOut.store(false);
 	while (m_stopPlayingOut.load() != true)       //  loop until someone external orders a stop
 	{
 		using namespace std::chrono;
@@ -353,8 +396,11 @@ bool MainWindow::playVideo(QString sourceName)
 				ui->checkBoxVideoPlaybackDebugLogging->isChecked());
 		}
 	}
-	m_stopPlayingOut.store(false);
-	m_pAudioSink.reset();
+	if (m_pAudioSink) 
+	{
+		delete m_pAudioSink;
+		m_pAudioSink = nullptr;
+	} // The QAudioSink is a QObject with QTimers, and should be destroyed on same thread it is created i.e. here
 	return true;
 }
 
@@ -373,22 +419,38 @@ void MainWindow::identifyAudioParameters(NDIlib_audio_frame_v2_t const& audio_fr
 			.arg(audio_frame.sample_rate)
 			.arg(audio_frame.p_metadata));
 
-		QAudioFormat audioFormat;
-		m_sampleRateToDraw = audio_frame.sample_rate;
-		audioFormat.setSampleRate(audio_frame.sample_rate);
-		audioFormat.setChannelCount(m_numChannels);
-		audioFormat.setSampleFormat(QAudioFormat::Float);
+		m_currentAudioFormat = QAudioFormat();
 
-		if (!m_defaultAudioDevice.isFormatSupported(audioFormat))
+		m_currentAudioFormat.setSampleRate(audio_frame.sample_rate);
+		m_currentAudioFormat.setChannelCount(audio_frame.no_channels);
+		m_currentAudioFormat.setSampleFormat(QAudioFormat::Float);
+
+		if (!m_selectedAudioDevice.isFormatSupported(m_currentAudioFormat))
 		{
 			log(QString("Audio format not supported by device, cannot play audio. Sample rate: %1 , channel count: %2 , sample format: FLOAT")
-				       .arg(audio_frame.sample_rate).arg(m_numChannels),
-				ui->checkBoxVideoPlaybackDebugLogging->isChecked());
+				       .arg(audio_frame.sample_rate).arg(audio_frame.no_channels));
+
+			m_currentAudioFormat = m_selectedAudioDevice.preferredFormat();
+			log(QString("Will attempt preferred format: Sample rate: %1 , channel count: %2 , sample format: %3")
+				.arg(m_currentAudioFormat.sampleRate()).arg(m_currentAudioFormat.channelCount()).arg(m_currentAudioFormat.sampleFormat()));
+
+			if (m_pAudioSink)
+			{
+				delete m_pAudioSink;
+				m_pAudioSink = nullptr;
+			}
+			m_pAudioSink = new QAudioSink(m_selectedAudioDevice, m_currentAudioFormat);
 		}
 		else
 		{
 			log("Audio format supported by device.", ui->checkBoxVideoPlaybackDebugLogging->isChecked());
-			m_pAudioSink.reset(new QAudioSink(audioFormat));
+
+			if (m_pAudioSink)
+			{
+				delete m_pAudioSink;
+				m_pAudioSink = nullptr;
+			}
+			m_pAudioSink = new QAudioSink(m_selectedAudioDevice, m_currentAudioFormat);
 		}
 		m_audioIdentified = true;
 	}
