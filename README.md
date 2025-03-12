@@ -58,7 +58,12 @@ Upon running, the default audio device is detected. This will be used for audio 
 
 ![Image of NDRReceiver application](https://github.com/HowlsMovingCast/NDIReceive/blob/main/readmeImages/overview.jpg?raw=true)
 
+On start, the default output audio device is identifed and selected.
 
-Find NDI streams by clicking "Scan for streams." 
+Press "Redetect Sound Devices" to show all identified output sound devices. The combobox in "Sound Output Device Selection" can be used to select one. The software will attempt to output sound in that devices preferred format. If this cannot be done, the log should indicate such (turn on "Debug Logging" in "Video Playback" section).
 
+Find NDI streams by clicking "Scan for streams."
+ 
 Select one of the found streams and either "Begin playback" in the "Video playback" tab, or "Capture Video Frame" in the "Video Frame Capture" tab. The selected stream will be interrogated for the relevant data which will then be displayed or streamed.
+
+The file "sampleUsage.mkv" shows the software running, finding multiple sound output devices, finding NDI sources, playing one back at 20 FPS and also 10 FPS, and also grabbing a single frame.
